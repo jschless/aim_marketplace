@@ -324,18 +324,19 @@ class Marketplace(object):
 
         """
         stats = {}
+        raw_stats = {}
         for prefix, li in zip(["sim_e_", "sim_a_"], [self.employers, self.applicants]):
             # Stats for all entities
             temp = np.array([e.get_cur_match_pref() + 1 for e in li])
             stats[prefix + "mean"] = np.mean(temp)
             stats[prefix + "std"] = np.std(temp)
-
+            raw_stats[prefix] = temp
             # Stats for only rule followers
             temp = np.array([e.get_cur_match_pref() + 1 for e in li if e.rule_follower])
             if len(temp) > 0:
                 stats[prefix + "rulefollower_mean"] = np.mean(temp)
                 stats[prefix + "rulefollower_std"] = np.std(temp)
-
+            raw_stats[prefix + "rulefollower"] = temp
             # Stats for only rule breakers
             temp = np.array(
                 [e.get_cur_match_pref() + 1 for e in li if not e.rule_follower]
@@ -343,15 +344,16 @@ class Marketplace(object):
             if len(temp) > 0:
                 stats[prefix + "rulebreaker_mean"] = np.mean(temp)
                 stats[prefix + "rulebreaker_std"] = np.std(temp)
-
+            raw_stats[prefix + "rulebreaker"] = temp
         # Stats from stable marriage algorithm
         e_res, a_res = self.stable_marriage()
         stats["alg_e_mean"] = np.mean(e_res)
         stats["alg_e_std"] = np.std(e_res)
         stats["alg_a_mean"] = np.mean(a_res)
         stats["alg_a_std"] = np.std(a_res)
-
-        return stats
+        raw_stats["alg_e"] = np.mean(e_res)
+        raw_stats["alg_a"] = np.mean(a_res)
+        return stats, raw_stats
 
     def get_desirability_stats(self):
         """Returns distribution of desirability for each place. A vibe check for simulated data
@@ -393,26 +395,34 @@ class Simulation(object):
         self.marketplace_params = marketplace_params
         self.n_iters = n_iters
         self.m_specs = []
+        self.full_stats = defaultdict(list)
         self.summary_stats = defaultdict(list)
 
     def run(self):
         for m_spec in tqdm(self.marketplace_params):
             raw_stats = defaultdict(list)
+            raw_vecs = defaultdict(list)
             for i in range(self.n_iters):
                 m = Marketplace(**m_spec)
                 m.run_marketplace()
 
                 # Collect stats for each iteration and store in loop-local raw_stats
-                for k, v in m.get_stats().items():
+                point_estimates, vectors = m.get_stats()
+                for k, v in point_estimates.items():
                     raw_stats[k].append(v)
+
+                for k, v in vectors.items():
+                    raw_vecs[k].append(v)
 
             # Save specification of each marketplace for results presentation (and posterity)
             self.m_specs.append(m.specification)
 
             # The many iterations get averaged into a single value and saved
-            # It might be better for each summary to have n_iters number of results
             for k, v in raw_stats.items():
                 self.summary_stats[k].append(np.mean(v))
+
+            for k, v in raw_vecs.items():
+                self.full_stats[k].append(v)
 
             # Add in nans for potentially not existing things
             # For example, if there are no rule breakers,
