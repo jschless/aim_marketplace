@@ -472,4 +472,24 @@ class Simulation(object):
 
         id_vars += ["method", "type", "method_type", "outcome"]
         df = df.pivot_table(index=id_vars, columns="stat", values="value").reset_index()
-        return df
+
+        df["base_outcome"] = (
+            df["outcome"].str.replace("_mean", "").str.replace("_std", "")
+        )
+        df["stat_type"] = df["outcome"].apply(
+            lambda x: "mean" if "mean" in x else "std"
+        )
+        id_vars.append("base_outcome")
+        id_vars.remove("outcome")
+        pivot_df = df.pivot_table(
+            index=id_vars, columns="stat_type", values=["mean", "std"]
+        ).reset_index()
+        pivot_df.columns = [
+            "_".join(col).strip() if col[1] else col[0]
+            for col in pivot_df.columns.values
+        ]
+        pivot_df = pivot_df.rename(
+            columns={"base_outcome_": "outcome", "mean_mean": "mean", "std_std": "std"}
+        )
+
+        return pivot_df
