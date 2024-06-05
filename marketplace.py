@@ -499,7 +499,7 @@ class Simulation(object):
             for col in pivot_df.columns.values
         ]
         pivot_df = pivot_df.rename(
-            columns={"base_outcome_": "outcome", "mean_mean": "mean", "std_std": "std"}
+            columns={"base_outcome": "outcome", "mean_mean": "mean", "std_std": "std"}
         )
 
         return pivot_df
