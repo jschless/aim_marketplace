@@ -5,6 +5,7 @@ import random
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+from matching.games import StableMarriage
 
 DEBUG = False
 RANDOM = True
@@ -69,10 +70,11 @@ class Entity(ABC):
 
 class Employer(Entity):
     def make_offer(self):
-        # makes an offer to a candidate
         if self.rule_follower:
+            # never makes an offer if he's a rule follower
             return None
         elif self.current_match is None and self.p_index <= self.min_acceptance_thresh:
+            # Checks if there is no match and this candidate is above the threshold
             self.p_index += 1
             if DEBUG:
                 print(
@@ -88,20 +90,22 @@ class Applicant(Entity):
         # Receives an offer in the form of an employer
         # returns bool, employer
         # bool indicates whether match is accepted, employer indicates if someone was dropped from a match
+        # so other function can unmatch
 
-        if self.rule_follower:
-            return False, None
-
-        if self.get_preference(employer) > self.min_acceptance_thresh:
+        if (
+            self.get_preference(employer) > self.min_acceptance_thresh
+            or self.rule_follower
+        ):
             return False, None
 
         if self.current_match is None:
+            # No current match, so accept
             if DEBUG:
                 print(f"{self.name} has no match and accepts {employer.name}")
             self.current_match = employer
             return True, None
         elif self.get_preference(self.current_match) > self.get_preference(employer):
-            # the match is better than the current one
+            # the new offer is better than the current match
             if DEBUG:
                 print(
                     f"{self.name} found a better match, accepts {employer.name} ({self.get_preference(employer)}), and discards {self.current_match.name} ({self.get_preference(self.current_match)})"
@@ -110,6 +114,7 @@ class Applicant(Entity):
             self.current_match = employer
             return True, last_match
         else:
+            # New offer is worse than current match
             return False, None
 
 
@@ -120,13 +125,12 @@ class Marketplace(object):
     market_size (int): how many people are in the market
     employer_min_acceptance_thresh (int): Employers will only offer jobs to applicants ranked at least this highly on their list
     applicant_min_acceptance_thresh (int): Applicants will only accept jobs from employers ranked at least this highly
-    employer_preference_distribution (str): Way employer makes preferences:
+    employer/applicant_preference_distribution (str): Way employer/applicant makes preferences:
         'Normal': sort desirability scores with added bias (random sample from N(0,30))
         'Uniform': shuffle irrespective of desirability
-    applicant_preference_distribution (str): Way applicant makes preferences:
-        'Normal': sort desirability scores with added bias (random sample from N(0,30))
-        'Uniform': shuffle irrespective of desirability
-
+    employer/applicant_desirability_dist (int, int): parameterizes the normal distribution from which employer/applicant desirabilities are drawn
+    employer/applicant_rule_follower_rate (int between 0 and 1): what proportion of employers/applicants follow the rules (e.g. don't pre-match)
+    employer/applicant_noise (int): parameterizes the normal distribution N(0, noise) that represents an applicant/employers desire for a particular employer/applicant
     """
 
     def __init__(
@@ -136,8 +140,8 @@ class Marketplace(object):
         applicant_min_acceptance_thresh=None,
         employer_preference_distribution: str = "Normal",
         applicant_preference_distribution: str = "Normal",
-        place_des_dist=(50, 20),
-        app_des_dist=(50, 20),
+        employer_desirability_params=(50, 20),
+        applicant_desirability_params=(50, 20),
         employer_rule_follower_rate=0,
         applicant_rule_follower_rate=0,
         employer_noise=20,
@@ -167,15 +171,19 @@ class Marketplace(object):
             np.random.seed(0)
             random.seed(0)
 
-        places = list(set([fake.city() for _ in range(250)]))
-        names = list(set([fake.name() for _ in range(250)]))
+        employers = list(set([fake.city() for _ in range(250)]))
+        applicants = list(set([fake.name() for _ in range(250)]))
         if not RANDOM:
             np.random.seed(0)
-        place_des = np.random.normal(*place_des_dist, market_size)
+        employer_desirabilities = np.random.normal(
+            *employer_desirability_params, market_size
+        )
 
         if not RANDOM:
             np.random.seed(0)
-        app_des = np.random.normal(*app_des_dist, market_size)
+        applicant_desirabilities = np.random.normal(
+            *applicant_desirability_params, market_size
+        )
 
         self.employers = [
             Employer(
@@ -186,7 +194,7 @@ class Marketplace(object):
                 rule_follower=random.random() < employer_rule_follower_rate,
                 noise=employer_noise,
             )
-            for e, d in zip(places[:market_size], place_des)
+            for e, d in zip(employers[:market_size], employer_desirabilities)
         ]
         self.applicants = [
             Applicant(
@@ -197,7 +205,7 @@ class Marketplace(object):
                 rule_follower=random.random() < applicant_rule_follower_rate,
                 noise=applicant_noise,
             )
-            for a, d in zip(names[:market_size], app_des)
+            for a, d in zip(applicants[:market_size], applicant_desirabilities)
         ]
 
     def description(self):
@@ -234,8 +242,13 @@ class Marketplace(object):
             a.make_preferences(self.employers)
 
     def match(self):
-        # runs match
-        # while any(e.current_match is None for e in self.employers):
+        # runs matching algorithm
+        # 1. Do a round for every applicant in the market
+        # 2. Each employer makes an offer to his top choice (that they haven't offered to yet)
+        #    if they don't have a match
+        # 3. Applicants either accept, accept and displace a match, or reject
+        # 4. Once all is over, if there are remaining matchless people run Gale-Shapley
+
         for i in range(self.market_size):
             for e in self.employers:
                 offer = e.make_offer()
@@ -251,7 +264,7 @@ class Marketplace(object):
         self.stable_marriage_remaining()
 
     def stable_marriage_remaining(self):
-        # runs stable marriage on anyone not getting a match
+        # runs stable marriage on anyone not matched or erroneously in a match
         e_unmatched, a_unmatched = self.get_unmatched()
         e_names, a_names = set([e.name for e in e_unmatched]), set(
             [a.name for a in a_unmatched]
@@ -263,8 +276,6 @@ class Marketplace(object):
 
         for a in a_unmatched:
             a_prefs[a.name] = [p.name for p in a.preferences if p.name in e_names]
-
-        from matching.games import StableMarriage
 
         game = StableMarriage.create_from_dictionaries(e_prefs, a_prefs)
         ans = game.solve()
@@ -290,8 +301,6 @@ class Marketplace(object):
         )
 
     def stable_marriage(self):
-        from matching.games import StableMarriage
-
         e_prefs, a_prefs = self.build_dict_prefs()
         game = StableMarriage.create_from_dictionaries(e_prefs, a_prefs)
         ans = game.solve()
@@ -299,48 +308,43 @@ class Marketplace(object):
         e_res, a_res = [], []
 
         for e, a in ans.items():
-            # print(f"{e} -> {a}")
             e_res.append(e_prefs[e.name].index(a.name) + 1)
             a_res.append(a_prefs[a.name].index(e.name) + 1)
 
         return np.array(e_res), np.array(a_res)
-        # e_avg, a_avg = np.mean(e_res), np.mean(a_res)
-        # return e_avg, a_avg
 
     def print_matching(self):
         for e in self.employers:
             print(f"{e.name} -> {e.current_match.name}")
 
-    ### Statistics
     def get_stats(self):
-        """Returns statistics for the simulation
+        """Returns a ton of statistics for the simulation
 
-        1. Array of employer received preferences
-        2. Array of applicant received preferences
+        # TODO: collect more granular data rather than just mean/std
+
         """
         stats = {}
         for prefix, li in zip(["sim_e_", "sim_a_"], [self.employers, self.applicants]):
+            # Stats for all entities
             temp = np.array([e.get_cur_match_pref() + 1 for e in li])
             stats[prefix + "mean"] = np.mean(temp)
             stats[prefix + "std"] = np.std(temp)
+
+            # Stats for only rule followers
             temp = np.array([e.get_cur_match_pref() + 1 for e in li if e.rule_follower])
             if len(temp) > 0:
                 stats[prefix + "rulefollower_mean"] = np.mean(temp)
                 stats[prefix + "rulefollower_std"] = np.std(temp)
-            # else:
-            #     stats[prefix + "rulefollower_mean"] = np.nan
-            #     stats[prefix + "rulefollower_std"] = np.nan
 
+            # Stats for only rule breakers
             temp = np.array(
                 [e.get_cur_match_pref() + 1 for e in li if not e.rule_follower]
             )
             if len(temp) > 0:
                 stats[prefix + "rulebreaker_mean"] = np.mean(temp)
                 stats[prefix + "rulebreaker_std"] = np.std(temp)
-            # else:
-            #     stats[prefix + "rulebreaker_mean"] = np.nan
-            #     stats[prefix + "rulebreaker_std"] = np.nan
 
+        # Stats from stable marriage algorithm
         e_res, a_res = self.stable_marriage()
         stats["alg_e_mean"] = np.mean(e_res)
         stats["alg_e_std"] = np.std(e_res)
@@ -350,28 +354,30 @@ class Marketplace(object):
         return stats
 
     def get_desirability_stats(self):
-        """Returns distribution of desirability
+        """Returns distribution of desirability for each place. A vibe check for simulated data
 
         1. {employer_name: array of positions employer_name is preferenced by applicants}
         2. {applicant_name: array of positions applicant_name is preferenced by employers}
         """
         employer_desirabilities = {}
         for e in self.employers:
-            temp = []
-            for a in self.applicants:
-                for i, ap in enumerate(a.preferences):
-                    if ap.name == e.name:
-                        temp.append(i + 1)
+            temp = [
+                i + 1
+                for a in self.applicants
+                for i, ap in enumerate(a.preferences)
+                if ap.name == e.name
+            ]
 
             employer_desirabilities[e.name] = temp
 
         applicant_desirabilities = {}
         for a in self.applicants:
-            temp = []
-            for e in self.employers:
-                for i, ep in enumerate(e.preferences):
-                    if ep.name == a.name:
-                        temp.append(i + 1)
+            temp = [
+                i + 1
+                for e in self.employers
+                for i, ep in enumerate(e.preferences)
+                if ep.name == a.name
+            ]
 
             applicant_desirabilities[a.name] = temp
 
@@ -387,7 +393,6 @@ class Simulation(object):
         self.marketplace_params = marketplace_params
         self.n_iters = n_iters
         self.m_specs = []
-
         self.summary_stats = defaultdict(list)
 
     def run(self):
@@ -397,14 +402,21 @@ class Simulation(object):
                 m = Marketplace(**m_spec)
                 m.run_marketplace()
 
+                # Collect stats for each iteration and store in loop-local raw_stats
                 for k, v in m.get_stats().items():
                     raw_stats[k].append(v)
 
+            # Save specification of each marketplace for results presentation (and posterity)
             self.m_specs.append(m.specification)
+
+            # The many iterations get averaged into a single value and saved
+            # It might be better for each summary to have n_iters number of results
             for k, v in raw_stats.items():
                 self.summary_stats[k].append(np.mean(v))
 
             # Add in nans for potentially not existing things
+            # For example, if there are no rule breakers,
+            # then we will not have a rulebreaker mean or stdev
             for o in [
                 "sim_a_rulebreaker_mean",
                 "sim_a_rulebreaker_std",
@@ -419,7 +431,7 @@ class Simulation(object):
                     self.summary_stats[o].append(np.nan)
 
     def to_df(self):
-        # Takes a name for whatever is varying + the values and returns a dataframe with results
+        # Returns dataframe where every statistic + simulation parameter is its own column
         data = defaultdict(list)
         for d in self.m_specs:
             for key, value in d.items():
@@ -432,6 +444,7 @@ class Simulation(object):
         return pd.DataFrame(data)
 
     def to_melted_df(self):
+        # Returns melted dataframe that is good for seaborn plots
         df = self.to_df()
         value_vars = [
             col
@@ -456,7 +469,7 @@ class Simulation(object):
         )
         df["method_type"] = df.method + "-" + df.type
         df["stat"] = df.outcome.apply(lambda x: "mean" if "mean" in x else "std")
-        # df = df.drop(columns=["temp"])
+
         id_vars += ["method", "type", "method_type", "outcome"]
         df = df.pivot_table(index=id_vars, columns="stat", values="value").reset_index()
         return df
