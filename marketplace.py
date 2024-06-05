@@ -1,10 +1,9 @@
-from faker import Faker
-from tqdm import tqdm
 from abc import ABC, abstractmethod
 import random
+
+from tqdm import tqdm
 import numpy as np
-import pandas as pd
-from collections import defaultdict
+from faker import Faker
 from matching.games import StableMarriage
 
 DEBUG = False
@@ -19,7 +18,7 @@ class Entity(ABC):
         min_acceptance_thresh,
         preference_distribution,
         rule_follower=False,
-        lie_rate=0,
+        liar=False,
         noise=20,
     ):
         self.name = name
@@ -28,7 +27,7 @@ class Entity(ABC):
         self.preferences = None
         self.preference_distribution = preference_distribution
         self.min_acceptance_thresh = min_acceptance_thresh
-        self.lie_rate = lie_rate
+        self.liar = liar
         self.rule_follower = rule_follower
         self.noise = noise
 
@@ -70,9 +69,18 @@ class Entity(ABC):
 
 class Employer(Entity):
     def make_offer(self):
-        if self.rule_follower:
+        # Returns Option[Applicant offering a match or None], Sincerity (bool)
+
+        if self.liar:
+            # TODO
+            # Liars will offer everyone a job up to a certain threshold...
+            # They will accept the best match they get
+            raise NotImplementedError
+
+        elif self.rule_follower:
             # never makes an offer if he's a rule follower
             return None
+
         elif self.current_match is None and self.p_index <= self.min_acceptance_thresh:
             # Checks if there is no match and this candidate is above the threshold
             self.p_index += 1
@@ -88,14 +96,20 @@ class Employer(Entity):
 class Applicant(Entity):
     def respond_to_offer(self, employer):
         # Receives an offer in the form of an employer
-        # returns bool, employer
+        # returns acceptance (bool), replaced offer Option[employer replaced or None], Sincerity
         # bool indicates whether match is accepted, employer indicates if someone was dropped from a match
         # so other function can unmatch
+
+        if self.liar:
+            # TODO
+            # Always accepts jobs but only matches with the highest guy
+            raise NotImplementedError
 
         if (
             self.get_preference(employer) > self.min_acceptance_thresh
             or self.rule_follower
         ):
+            # Not at acceptance threshold or is a rule follower
             return False, None
 
         if self.current_match is None:
@@ -249,6 +263,15 @@ class Marketplace(object):
         # 3. Applicants either accept, accept and displace a match, or reject
         # 4. Once all is over, if there are remaining matchless people run Gale-Shapley
 
+        # TODO: implement insincerity
+        # Four cases:
+        # 1. Sincere offer, sincere acceptance: work as normal
+        # 2. Sincere offer, insincere acceptance: employer thinks it's a match, but it only is
+        #    binding if it is preferable for the applicant. Applicant doesn't inform other matches of broken match
+        # 3. Insincere offer, sincere acceptance: Applicant thinks its a match, but it only is binding
+        #    if it is preferred by the employer. Employer doesn't inform other matches of broken match
+        # 4. Insincere offer, insincere acceptance: Only binding for each if it's preferred... neither informs broken matches
+
         for i in range(self.market_size):
             for e in self.employers:
                 offer = e.make_offer()
@@ -388,118 +411,3 @@ class Marketplace(object):
     def run_marketplace(self):
         self.build_preferences()
         self.match()
-
-
-class Simulation(object):
-    def __init__(self, marketplace_params: list, n_iters: int):
-        self.marketplace_params = marketplace_params
-        self.n_iters = n_iters
-        self.m_specs = []
-        self.full_stats = defaultdict(list)
-        self.summary_stats = defaultdict(list)
-
-    def run(self):
-        for m_spec in tqdm(self.marketplace_params):
-            raw_stats = defaultdict(list)
-            raw_vecs = defaultdict(list)
-            for i in range(self.n_iters):
-                m = Marketplace(**m_spec)
-                m.run_marketplace()
-
-                # Collect stats for each iteration and store in loop-local raw_stats
-                point_estimates, vectors = m.get_stats()
-                for k, v in point_estimates.items():
-                    raw_stats[k].append(v)
-
-                for k, v in vectors.items():
-                    raw_vecs[k].append(v)
-
-            # Save specification of each marketplace for results presentation (and posterity)
-            self.m_specs.append(m.specification)
-
-            # The many iterations get averaged into a single value and saved
-            for k, v in raw_stats.items():
-                self.summary_stats[k].append(np.mean(v))
-
-            for k, v in raw_vecs.items():
-                self.full_stats[k].append(v)
-
-            # Add in nans for potentially not existing things
-            # For example, if there are no rule breakers,
-            # then we will not have a rulebreaker mean or stdev
-            for o in [
-                "sim_a_rulebreaker_mean",
-                "sim_a_rulebreaker_std",
-                "sim_e_rulebreaker_mean",
-                "sim_e_rulebreaker_std",
-                "sim_a_rulefollower_mean",
-                "sim_a_rulefollower_std",
-                "sim_e_rulefollower_mean",
-                "sim_e_rulefollower_std",
-            ]:
-                if o not in raw_stats:
-                    self.summary_stats[o].append(np.nan)
-
-    def to_df(self):
-        # Returns dataframe where every statistic + simulation parameter is its own column
-        data = defaultdict(list)
-        for d in self.m_specs:
-            for key, value in d.items():
-                if value is None:
-                    value = "None"
-                data[key].append(value)
-        for k, v in self.summary_stats.items():
-            data[k] = v
-
-        return pd.DataFrame(data)
-
-    def to_melted_df(self):
-        # Returns melted dataframe that is good for seaborn plots
-        df = self.to_df()
-        value_vars = [
-            col
-            for col in df.columns
-            if col.startswith("sim_") or col.startswith("alg_")
-        ]
-        id_vars = [col for col in df.columns if col not in value_vars]
-
-        df = pd.melt(
-            df,
-            id_vars=id_vars,
-            value_vars=value_vars,
-            var_name="outcome",
-            value_name="value",
-        )
-
-        df["method"] = df.outcome.apply(
-            lambda x: "simulated" if "sim" in x else "algorithmic"
-        )
-        df["type"] = df.outcome.apply(
-            lambda x: "employer" if "_e_" in x else "applicant"
-        )
-        df["method_type"] = df.method + "-" + df.type
-        df["stat"] = df.outcome.apply(lambda x: "mean" if "mean" in x else "std")
-
-        id_vars += ["method", "type", "method_type", "outcome"]
-        df = df.pivot_table(index=id_vars, columns="stat", values="value").reset_index()
-
-        df["base_outcome"] = (
-            df["outcome"].str.replace("_mean", "").str.replace("_std", "")
-        )
-        df["stat_type"] = df["outcome"].apply(
-            lambda x: "mean" if "mean" in x else "std"
-        )
-        id_vars.append("base_outcome")
-        id_vars.remove("outcome")
-        pivot_df = df.pivot_table(
-            index=id_vars, columns="stat_type", values=["mean", "std"]
-        ).reset_index()
-        pivot_df.columns = [
-            "_".join(col).strip() if col[1] else col[0]
-            for col in pivot_df.columns.values
-        ]
-        pivot_df = pivot_df.rename(
-            columns={"base_outcome": "outcome", "mean_mean": "mean", "std_std": "std"}
-        )
-
-        return pivot_df
