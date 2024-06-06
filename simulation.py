@@ -6,11 +6,19 @@ from marketplace import *
 
 class Simulation(object):
     def __init__(self, marketplace_params: list, n_iters: int):
+        """
+        full_stats: {stat_name -> list where each item is results from a particular marketplace instantiation ->
+                     list of vector for each iteration where each vector is the preference received for all candidates}
+        vec_stats: {stat_name -> list where each item is results from a particular marketplace instantiation ->
+                    list of summary stats for each iteration}
+        summary_stats: {stat_name -> list of length # specifications -> average of statistic across all iterations}
+        """
         self.marketplace_params = marketplace_params
         self.n_iters = n_iters
         self.m_specs = []
         self.full_stats = defaultdict(list)
         self.summary_stats = defaultdict(list)
+        self.vec_stats = defauldict(list)
 
     def run(self):
         for m_spec in tqdm(self.marketplace_params):
@@ -34,7 +42,7 @@ class Simulation(object):
             # The many iterations get averaged into a single value and saved
             for k, v in raw_stats.items():
                 self.summary_stats[k].append(np.mean(v))
-
+                self.vec_stats[k].append(v)
             for k, v in raw_vecs.items():
                 self.full_stats[k].append(v)
 
