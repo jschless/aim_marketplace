@@ -5,6 +5,7 @@ from tqdm import tqdm
 import numpy as np
 from faker import Faker
 from matching.games import StableMarriage
+import test_config
 
 DEBUG = False
 RANDOM = True
@@ -29,6 +30,12 @@ class Entity(ABC):
         self.min_acceptance_thresh = min_acceptance_thresh
         self.liar = liar
         self.rule_follower = rule_follower
+
+        if self.liar and self.rule_follower:
+            # Can't be both a liar and rule follower, but could happen based on stochasticity
+            # In case of conflict, we'll make them a liar
+            self.rule_follower = False
+
         self.noise = noise
 
     def __str__(self):
@@ -63,24 +70,18 @@ class Entity(ABC):
     def get_cur_match_pref(self):
         return self.preferences.index(self.current_match)
 
-    def should_lie(self):
-        return random.random() < self.lie_rate
-
 
 class Employer(Entity):
     def make_offer(self):
         # Returns Option[Applicant offering a match or None], Sincerity (bool)
-
-        if self.liar:
-            # TODO
-            # Liars will offer everyone a job up to a certain threshold...
-            # They will accept the best match they get
-            raise NotImplementedError
-
-        elif self.rule_follower:
+        # Sincerity is true if he's not a liar
+        if self.rule_follower:
             # never makes an offer if he's a rule follower
-            return None
-
+            return None, True
+        elif self.liar and self.p_index <= self.min_acceptance_thresh:
+            # if they're liars and the person is within their acceptance thresh, make an insincere offer
+            self.p_index += 1
+            return self.preferences[self.p_index - 1], False
         elif self.current_match is None and self.p_index <= self.min_acceptance_thresh:
             # Checks if there is no match and this candidate is above the threshold
             self.p_index += 1
@@ -88,48 +89,42 @@ class Employer(Entity):
                 print(
                     f"{self.name} making offer to {self.preferences[self.p_index - 1].name}"
                 )
-            return self.preferences[self.p_index - 1]
+            return self.preferences[self.p_index - 1], True
         else:
-            return None
+            return None, True
 
 
 class Applicant(Entity):
     def respond_to_offer(self, employer):
         # Receives an offer in the form of an employer
-        # returns acceptance (bool), replaced offer Option[employer replaced or None], Sincerity
-        # bool indicates whether match is accepted, employer indicates if someone was dropped from a match
-        # so other function can unmatch
+        # returns acceptance (bool), sincerity (bool)
+        # bool indicates whether match is accepted, sincerity indicates whether applicant is a liar
 
-        if self.liar:
-            # TODO
-            # Always accepts jobs but only matches with the highest guy
-            raise NotImplementedError
-
-        if (
+        if not self.liar and (
             self.get_preference(employer) > self.min_acceptance_thresh
             or self.rule_follower
         ):
             # Not at acceptance threshold or is a rule follower
-            return False, None
+            return False, True
 
-        if self.current_match is None:
+        if self.liar and self.get_preference(employer) <= self.min_acceptance_thresh:
+            # if they're a liar, they accept
+            return True, False
+        elif self.current_match is None:
             # No current match, so accept
             if DEBUG:
                 print(f"{self.name} has no match and accepts {employer.name}")
-            self.current_match = employer
-            return True, None
+            return True, True
         elif self.get_preference(self.current_match) > self.get_preference(employer):
             # the new offer is better than the current match
             if DEBUG:
                 print(
                     f"{self.name} found a better match, accepts {employer.name} ({self.get_preference(employer)}), and discards {self.current_match.name} ({self.get_preference(self.current_match)})"
                 )
-            last_match = self.current_match
-            self.current_match = employer
-            return True, last_match
+            return True, True
         else:
-            # New offer is worse than current match
-            return False, None
+            # New offer is worse than current match and they're not lying
+            return False, True
 
 
 class Marketplace(object):
@@ -143,8 +138,9 @@ class Marketplace(object):
         'Normal': sort desirability scores with added bias (random sample from N(0,30))
         'Uniform': shuffle irrespective of desirability
     employer/applicant_desirability_dist (int, int): parameterizes the normal distribution from which employer/applicant desirabilities are drawn
-    employer/applicant_rule_follower_rate (int between 0 and 1): what proportion of employers/applicants follow the rules (e.g. don't pre-match)
+    employer/applicant_rule_follower_rate (float between 0 and 1): what proportion of employers/applicants follow the rules (e.g. don't pre-match)
     employer/applicant_noise (int): parameterizes the normal distribution N(0, noise) that represents an applicant/employers desire for a particular employer/applicant
+    employer/applicant_lie_rate (float between 0 and 1): what proportion of employers/applicants lies. Liars offer/accept matches but they are being unreliable.
     """
 
     def __init__(
@@ -160,6 +156,8 @@ class Marketplace(object):
         applicant_rule_follower_rate=0,
         employer_noise=20,
         applicant_noise=20,
+        employer_lie_rate=0,
+        applicant_lie_rate=0,
     ):
         params = locals()
         unwanted = ["self"]
@@ -206,6 +204,7 @@ class Marketplace(object):
                 self.employer_min_acceptance_thresh,
                 self.employer_preference_distribution,
                 rule_follower=random.random() < employer_rule_follower_rate,
+                liar=random.random() < employer_lie_rate,
                 noise=employer_noise,
             )
             for e, d in zip(employers[:market_size], employer_desirabilities)
@@ -217,10 +216,54 @@ class Marketplace(object):
                 self.applicant_min_acceptance_thresh,
                 self.applicant_preference_distribution,
                 rule_follower=random.random() < applicant_rule_follower_rate,
+                liar=random.random() < applicant_lie_rate,
                 noise=applicant_noise,
             )
             for a, d in zip(applicants[:market_size], applicant_desirabilities)
         ]
+
+    @classmethod
+    def test_config(with_rule_breakers=False, with_liars=False):
+        # removes all randomness and generates a simple 10 person example
+        m = Marketplace.__new__(Marketplace)
+        m.market_size = test_config.market_size
+        m.employers = []
+        m.applicants = []
+        for name, prefs in zip(test_config.units, test_config.unit_preferences):
+            e = Employer(
+                name,
+                0,
+                test_config.min_acceptance_thresh,
+                test_config.preference_distribution,
+            )
+            e.preference_weights = prefs
+            e.p_index = 0
+            m.employers.append(e)
+
+        for name, prefs in zip(test_config.officers, test_config.officer_preferences):
+            a = Applicant(
+                name,
+                0,
+                test_config.min_acceptance_thresh,
+                test_config.preference_distribution,
+            )
+            a.preference_weights = prefs
+            a.p_index = 0
+            m.applicants.append(a)
+
+        for e in m.employers:
+            e.preferences = [
+                (a, weight) for (a, weight) in zip(m.applicants, e.preference_weights)
+            ]
+            e.preferences.sort(key=lambda x: x[1])
+            e.preferences = [tup[0] for tup in e.preferences]
+        for a in m.applicants:
+            a.preferences = [
+                (e, weight) for (e, weight) in zip(m.employers, a.preference_weights)
+            ]
+            a.preferences.sort(key=lambda x: x[1])
+            a.preferences = [tup[0] for tup in a.preferences]
+        return m
 
     def description(self):
         print(f"Running marketplace of size {self.market_size}")
@@ -262,29 +305,72 @@ class Marketplace(object):
         #    if they don't have a match
         # 3. Applicants either accept, accept and displace a match, or reject
         # 4. Once all is over, if there are remaining matchless people run Gale-Shapley
+        for i in range(self.market_size):
+            for e in self.employers:
+                offer, offer_sincerity = e.make_offer()
+                if offer is None:
+                    continue
+                decision, applicant_sincerity = offer.respond_to_offer(e)
+                if not decision:
+                    continue
+                self.handle_offer(
+                    e, offer_sincerity, offer, decision, applicant_sincerity
+                )
 
-        # TODO: implement insincerity
+        self.stable_marriage_remaining()
+
+    def handle_offer(
+        self,
+        employer,
+        employer_sincerity,
+        applicant,
+        applicant_decision,
+        applicant_sincerity,
+    ):
         # Four cases:
         # 1. Sincere offer, sincere acceptance: work as normal
         # 2. Sincere offer, insincere acceptance: employer thinks it's a match, but it only is
         #    binding if it is preferable for the applicant. Applicant doesn't inform other matches of broken match
         # 3. Insincere offer, sincere acceptance: Applicant thinks its a match, but it only is binding
         #    if it is preferred by the employer. Employer doesn't inform other matches of broken match
-        # 4. Insincere offer, insincere acceptance: Only binding for each if it's preferred... neither informs broken matches
-
-        for i in range(self.market_size):
-            for e in self.employers:
-                offer = e.make_offer()
-                if offer:
-                    decision, displaced = offer.respond_to_offer(e)
-                    if decision:
-                        e.current_match = offer
-                        if displaced:
-                            if DEBUG:
-                                print(f"{displaced.name} lost their match")
-                            displaced.current_match = None
-
-        self.stable_marriage_remaining()
+        # 4. Insincere offer, insincere acceptance: Only binding for each if it's preferred...
+        #    neither informs broken matches
+        if employer_sincerity and applicant_sincerity:
+            last_match = applicant.current_match
+            employer.current_match = applicant
+            applicant.current_match = employer
+            if last_match is not None:
+                # inform old match
+                last_match.current_match = None
+        elif not employer_sincerity and applicant_sincerity:
+            # employer is a liar, applicant isn't
+            last_match = applicant.current_match
+            applicant.current_match = employer
+            if last_match is not None:
+                # inform old match
+                last_match.current_match = None
+            if employer.current_match is None:
+                # employer only makes this his match if he has no current match
+                # if he has a match, its by definition a higher preference
+                employer.current_match = applicant
+        elif employer_sincerity and not applicant_sincerity:
+            employer.current_match = applicant
+            if applicant.current_match is None or applicant.get_preference(
+                employer
+            ) < applicant.get_preference(applicant.current_match):
+                applicant.current_match = employer
+                # don't inform broken matches
+        else:
+            # both are lying
+            if employer.current_match is None:
+                # employer only makes this his match if he has no current match
+                # if he has a match, its by definition a higher preference
+                employer.current_match = applicant
+            if applicant.current_match is None or applicant.get_preference(
+                employer
+            ) < applicant.get_preference(applicant.current_match):
+                applicant.current_match = employer
+                # don't inform broken matches
 
     def stable_marriage_remaining(self):
         # runs stable marriage on anyone not matched or erroneously in a match
@@ -338,14 +424,12 @@ class Marketplace(object):
 
     def print_matching(self):
         for e in self.employers:
-            print(f"{e.name} -> {e.current_match.name}")
+            print(
+                f"{e.name} ({e.get_cur_match_pref()}) -> {e.current_match.name} ({e.current_match.get_cur_match_pref()})"
+            )
 
     def get_stats(self):
-        """Returns a ton of statistics for the simulation
-
-        # TODO: collect more granular data rather than just mean/std
-
-        """
+        """Returns a ton of statistics for the simulation"""
         stats = {}
         raw_stats = {}
         for prefix, li in zip(["sim_e_", "sim_a_"], [self.employers, self.applicants]):
@@ -368,6 +452,19 @@ class Marketplace(object):
                 stats[prefix + "rulebreaker_mean"] = np.mean(temp)
                 stats[prefix + "rulebreaker_std"] = np.std(temp)
             raw_stats[prefix + "rulebreaker"] = temp
+
+            temp = np.array([e.get_cur_match_pref() + 1 for e in li if e.liar])
+            if len(temp) > 0:
+                stats[prefix + "liar_mean"] = np.mean(temp)
+                stats[prefix + "liar_std"] = np.std(temp)
+            raw_stats[prefix + "liar"] = temp
+
+            temp = np.array([e.get_cur_match_pref() + 1 for e in li if not e.liar])
+            if len(temp) > 0:
+                stats[prefix + "truther_mean"] = np.mean(temp)
+                stats[prefix + "truther_std"] = np.std(temp)
+            raw_stats[prefix + "truther"] = temp
+
         # Stats from stable marriage algorithm
         e_res, a_res = self.stable_marriage()
         stats["alg_e_mean"] = np.mean(e_res)
