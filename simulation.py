@@ -14,114 +14,95 @@ class Simulation(object):
         summary_stats: {stat_name -> list of length # specifications -> average of statistic across all iterations}
         """
         self.marketplace_params = marketplace_params
+        m = Marketplace(**marketplace_params[0])
+        self.marketplace_description = m.specification
         self.n_iters = n_iters
-        self.m_specs = []
-        self.full_stats = defaultdict(list)
-        self.summary_stats = defaultdict(list)
-        self.vec_stats = defauldict(list)
+        self.trials = []
+        # stores data from all trials. Each trial is unique based on its specification and it's iter
 
     def run(self):
+        trial = {}
         for m_spec in tqdm(self.marketplace_params):
-            raw_stats = defaultdict(list)
-            raw_vecs = defaultdict(list)
             for i in range(self.n_iters):
                 m = Marketplace(**m_spec)
                 m.run_marketplace()
+                trial["specification"] = m.specification
 
-                # Collect stats for each iteration and store in loop-local raw_stats
-                point_estimates, vectors = m.get_stats()
-                for k, v in point_estimates.items():
-                    raw_stats[k].append(v)
+                _, vectors = m.get_stats()
 
                 for k, v in vectors.items():
-                    raw_vecs[k].append(v)
+                    mean = np.mean(v) if v.size > 0 else np.nan
+                    std = np.std(v) if v.size > 0 else np.nan
+                    trial[k + "_mean"] = mean
+                    trial[k + "_std"] = std
+                    trial[k + "_vec"] = v
 
-            # Save specification of each marketplace for results presentation (and posterity)
-            self.m_specs.append(m.specification)
+                trial["iter"] = i
+                self.trials.append(trial.copy())
 
-            # The many iterations get averaged into a single value and saved
-            for k, v in raw_stats.items():
-                self.summary_stats[k].append(np.mean(v))
-                self.vec_stats[k].append(v)
-            for k, v in raw_vecs.items():
-                self.full_stats[k].append(v)
-
-            # Add in nans for potentially not existing things
-            # For example, if there are no rule breakers,
-            # then we will not have a rulebreaker mean or stdev
-            for o in [
-                "sim_a_rulebreaker_mean",
-                "sim_a_rulebreaker_std",
-                "sim_e_rulebreaker_mean",
-                "sim_e_rulebreaker_std",
-                "sim_a_rulefollower_mean",
-                "sim_a_rulefollower_std",
-                "sim_e_rulefollower_mean",
-                "sim_e_rulefollower_std",
-            ]:
-                if o not in raw_stats:
-                    self.summary_stats[o].append(np.nan)
-
-    def to_df(self):
-        # Returns dataframe where every statistic + simulation parameter is its own column
-        data = defaultdict(list)
-        for d in self.m_specs:
-            for key, value in d.items():
+    def to_long_df(self):
+        prefixes = [
+            "sim_e_",
+            "sim_e_rulebreaker_",
+            "sim_e_truther_",
+            "sim_e_rulefollower_",
+            "sim_e_liar_",
+            "sim_a_",
+            "sim_a_rulebreaker_",
+            "sim_a_truther_",
+            "sim_a_rulefollower_",
+            "sim_a_liar_",
+            "alg_a_",
+            "alg_e_",
+        ]
+        data = []
+        for t in self.trials:
+            row = {}
+            for param, value in t["specification"].items():
                 if value is None:
                     value = "None"
-                data[key].append(value)
-        for k, v in self.summary_stats.items():
-            data[k] = v
+                row[param] = value
 
-        return pd.DataFrame(data)
+            for pref in prefixes:
+                if pref + "mean" in t:
+                    row["outcome"] = pref[:-1]
+                    row["trial_mean"] = t[pref + "mean"]
+                    row["trial_std"] = t[pref + "std"]
+                    data.append(row.copy())
 
-    def to_melted_df(self):
-        # Returns melted dataframe that is good for seaborn plots
-        df = self.to_df()
-        value_vars = [
-            col
-            for col in df.columns
-            if col.startswith("sim_") or col.startswith("alg_")
-        ]
-        id_vars = [col for col in df.columns if col not in value_vars]
+        df = pd.DataFrame(data)
 
-        df = pd.melt(
-            df,
-            id_vars=id_vars,
-            value_vars=value_vars,
-            var_name="outcome",
-            value_name="value",
-        )
-
-        df["method"] = df.outcome.apply(
-            lambda x: "simulated" if "sim" in x else "algorithmic"
-        )
+        # add some nice columns
         df["type"] = df.outcome.apply(
-            lambda x: "employer" if "_e_" in x else "applicant"
-        )
-        df["method_type"] = df.method + "-" + df.type
-        df["stat"] = df.outcome.apply(lambda x: "mean" if "mean" in x else "std")
-
-        id_vars += ["method", "type", "method_type", "outcome"]
-        df = df.pivot_table(index=id_vars, columns="stat", values="value").reset_index()
-
-        df["base_outcome"] = (
-            df["outcome"].str.replace("_mean", "").str.replace("_std", "")
-        )
-        df["stat_type"] = df["outcome"].apply(
-            lambda x: "mean" if "mean" in x else "std"
-        )
-        id_vars.append("base_outcome")
-        id_vars.remove("outcome")
-        pivot_df = df.pivot_table(
-            index=id_vars, columns="stat_type", values=["mean", "std"]
-        ).reset_index()
-        pivot_df.columns = [
-            "_".join(col).strip() if col[1] else col[0]
-            for col in pivot_df.columns.values
-        ]
-        pivot_df = pivot_df.rename(
-            columns={"base_outcome": "outcome", "mean_mean": "mean", "std_std": "std"}
+            lambda x: "Employer" if "_e" in x else "Applicant"
         )
 
-        return pivot_df
+        def labeller(di, word):
+            for k, v in di.items():
+                if k in word:
+                    return v
+            return None
+
+        rule_follower_dict = {
+            "follower": "Compliant",
+            "breaker": "Cheater",
+            "alg": "Baseline",
+        }
+        df["rule_following"] = df.outcome.apply(
+            lambda x: labeller(rule_follower_dict, x)
+        )
+
+        liar_dict = {"liar": "Liar", "truther": "Honest", "alg": "Baseline"}
+        df["liar"] = df.outcome.apply(lambda x: labeller(liar_dict, x))
+
+        alg_dict = {"alg": "Algorithmic", "sim": "Simulated"}
+        df["alg_or_sim"] = df.outcome.apply(lambda x: labeller(alg_dict, x))
+
+        renamer = {
+            "trial_mean": "Average Preference Received",
+            "type": "Side of Market",
+            "rule_following": "Adherence to Rules",
+            "liar": "Honesty of Commitments",
+        }
+
+        return df
