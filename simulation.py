@@ -73,9 +73,7 @@ class Simulation(object):
         df = pd.DataFrame(data)
 
         # add some nice columns
-        df["type"] = df.outcome.apply(
-            lambda x: "Employer" if "_e" in x else "Applicant"
-        )
+        df["Party"] = df.outcome.apply(lambda x: "Unit" if "_e" in x else "Officer")
 
         def labeller(di, word):
             for k, v in di.items():
@@ -84,16 +82,16 @@ class Simulation(object):
             return None
 
         rule_follower_dict = {
-            "follower": "Compliant",
-            "breaker": "Cheater",
-            "alg": "Baseline",
+            "follower": "Rule Follower",
+            "breaker": "Rule Breaker",
+            "alg": "Gale-Shapley",
         }
-        df["rule_following"] = df.outcome.apply(
+        df["Rule Following Status"] = df.outcome.apply(
             lambda x: labeller(rule_follower_dict, x)
         )
 
-        liar_dict = {"liar": "Liar", "truther": "Honest", "alg": "Baseline"}
-        df["liar"] = df.outcome.apply(lambda x: labeller(liar_dict, x))
+        liar_dict = {"liar": "Liar", "truther": "Truth Teller", "alg": "Gale-Shapley"}
+        df["Lying Status"] = df.outcome.apply(lambda x: labeller(liar_dict, x))
 
         alg_dict = {"alg": "Algorithmic", "sim": "Simulated"}
         df["alg_or_sim"] = df.outcome.apply(lambda x: labeller(alg_dict, x))
