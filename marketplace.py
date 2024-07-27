@@ -335,6 +335,10 @@ class Marketplace(object):
         #    if it is preferred by the employer. Employer doesn't inform other matches of broken match
         # 4. Insincere offer, insincere acceptance: Only binding for each if it's preferred...
         #    neither informs broken matches
+
+        if applicant_decision is False:
+            return
+
         if employer_sincerity and applicant_sincerity:
             last_match = applicant.current_match
             employer.current_match = applicant
