@@ -31,12 +31,16 @@ def handle_offer(
         return
 
     if employer_sincerity and applicant_sincerity:
-        last_match = applicant.current_match
+        a_last_match = applicant.current_match
+        e_last_match = employer.current_match
         employer.current_match = applicant
         applicant.current_match = employer
-        if last_match is not None:
-            # inform old match
-            last_match.current_match = None
+
+        # inform old matches
+        if a_last_match is not None:
+            a_last_match.current_match = None
+        if e_last_match is not None:
+            e_last_match.current_match = None
     elif not employer_sincerity and applicant_sincerity:
         # employer is a liar, applicant isn't
         last_match = applicant.current_match
