@@ -168,7 +168,7 @@ class Applicant(Entity):
             # Not at acceptance threshold or is a rule follower
             return False, True
 
-        if self.liar and self.get_preference(employer) <= self.min_acceptance_thresh:
+        if self.liar:
             # if they're a liar, they accept
             return True, False
         elif self.current_match is None:
