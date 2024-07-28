@@ -11,6 +11,63 @@ DEBUG = False
 RANDOM = True
 
 
+def handle_offer(
+    employer,
+    employer_sincerity,
+    applicant,
+    applicant_decision,
+    applicant_sincerity,
+):
+    # Four cases:
+    # 1. Sincere offer, sincere acceptance: work as normal
+    # 2. Sincere offer, insincere acceptance: employer thinks it's a match, but it only is
+    #    binding if it is preferable for the applicant. Applicant doesn't inform other matches of broken match
+    # 3. Insincere offer, sincere acceptance: Applicant thinks its a match, but it only is binding
+    #    if it is preferred by the employer. Employer doesn't inform other matches of broken match
+    # 4. Insincere offer, insincere acceptance: Only binding for each if it's preferred...
+    #    neither informs broken matches
+
+    if applicant_decision is False:
+        return
+
+    if employer_sincerity and applicant_sincerity:
+        last_match = applicant.current_match
+        employer.current_match = applicant
+        applicant.current_match = employer
+        if last_match is not None:
+            # inform old match
+            last_match.current_match = None
+    elif not employer_sincerity and applicant_sincerity:
+        # employer is a liar, applicant isn't
+        last_match = applicant.current_match
+        applicant.current_match = employer
+        if last_match is not None:
+            # inform old match
+            last_match.current_match = None
+        if employer.current_match is None:
+            # employer only makes this his match if he has no current match
+            # if he has a match, its by definition a higher preference
+            employer.current_match = applicant
+    elif employer_sincerity and not applicant_sincerity:
+        employer.current_match = applicant
+        if applicant.current_match is None or applicant.get_preference(
+            employer
+        ) < applicant.get_preference(applicant.current_match):
+            applicant.current_match = employer
+            # don't inform broken matches
+    else:
+        # both are lying
+        if employer.current_match is None:
+            # employer only makes this his match if he has no current match
+            # if he has a match, its by definition a higher preference
+            employer.current_match = applicant
+        if applicant.current_match is None or applicant.get_preference(
+            employer
+        ) < applicant.get_preference(applicant.current_match):
+            applicant.current_match = employer
+            # don't inform broken matches
+
+
 class Entity(ABC):
     def __init__(
         self,
@@ -313,68 +370,9 @@ class Marketplace(object):
                 decision, applicant_sincerity = offer.respond_to_offer(e)
                 if not decision:
                     continue
-                self.handle_offer(
-                    e, offer_sincerity, offer, decision, applicant_sincerity
-                )
+                handle_offer(e, offer_sincerity, offer, decision, applicant_sincerity)
 
         self.stable_marriage_remaining()
-
-    def handle_offer(
-        self,
-        employer,
-        employer_sincerity,
-        applicant,
-        applicant_decision,
-        applicant_sincerity,
-    ):
-        # Four cases:
-        # 1. Sincere offer, sincere acceptance: work as normal
-        # 2. Sincere offer, insincere acceptance: employer thinks it's a match, but it only is
-        #    binding if it is preferable for the applicant. Applicant doesn't inform other matches of broken match
-        # 3. Insincere offer, sincere acceptance: Applicant thinks its a match, but it only is binding
-        #    if it is preferred by the employer. Employer doesn't inform other matches of broken match
-        # 4. Insincere offer, insincere acceptance: Only binding for each if it's preferred...
-        #    neither informs broken matches
-
-        if applicant_decision is False:
-            return
-
-        if employer_sincerity and applicant_sincerity:
-            last_match = applicant.current_match
-            employer.current_match = applicant
-            applicant.current_match = employer
-            if last_match is not None:
-                # inform old match
-                last_match.current_match = None
-        elif not employer_sincerity and applicant_sincerity:
-            # employer is a liar, applicant isn't
-            last_match = applicant.current_match
-            applicant.current_match = employer
-            if last_match is not None:
-                # inform old match
-                last_match.current_match = None
-            if employer.current_match is None:
-                # employer only makes this his match if he has no current match
-                # if he has a match, its by definition a higher preference
-                employer.current_match = applicant
-        elif employer_sincerity and not applicant_sincerity:
-            employer.current_match = applicant
-            if applicant.current_match is None or applicant.get_preference(
-                employer
-            ) < applicant.get_preference(applicant.current_match):
-                applicant.current_match = employer
-                # don't inform broken matches
-        else:
-            # both are lying
-            if employer.current_match is None:
-                # employer only makes this his match if he has no current match
-                # if he has a match, its by definition a higher preference
-                employer.current_match = applicant
-            if applicant.current_match is None or applicant.get_preference(
-                employer
-            ) < applicant.get_preference(applicant.current_match):
-                applicant.current_match = employer
-                # don't inform broken matches
 
     def stable_marriage_remaining(self):
         # runs stable marriage on anyone not matched or erroneously in a match
