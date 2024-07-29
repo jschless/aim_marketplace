@@ -7,10 +7,11 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 sns.set_style("darkgrid")
-market_sizes = list(range(25, 201, 25))
-acceptance_thresholds = [None, 10, 20]
-rule_follower_rates = [0.1 * i for i in range(11)]
-lie_rates = [0.1 * i for i in range(11)]
+market_sizes = [25, 50, 100, 200]
+
+e_acceptance_thresholds = [None, 10, 20]
+rule_follower_rates = [0.2 * i for i in range(6)]
+lie_rates = [0.2 * i for i in range(6)]
 n_iters = 100
 results_dir = "/Users/joeschlessinger/Programming/marketplace/plots"
 
@@ -79,7 +80,7 @@ def plot(sim, x_var, style, xlabel, output_file, output_dir="./plots", prefix=""
 def run_helper(a_t, market_size):
     default_marketplace_args = {
         "employer_min_acceptance_thresh": a_t,
-        "applicant_min_acceptance_thresh": a_t,
+        "applicant_min_acceptance_thresh": None,
         "market_size": market_size,
     }
     plot_prefix = ""
@@ -256,8 +257,9 @@ def run_helper(a_t, market_size):
 if __name__ == "__main__":
     # Should run a bunch of simulations, plot them, and save the figures
 
-    combinations = list(itertools.product(acceptance_thresholds, market_sizes))
+    combinations = list(itertools.product(e_acceptance_thresholds, market_sizes))
     num_processes = mp.cpu_count()
+    print(f"Running with a pool of {num_processes} processors")
 
     with mp.Pool(num_processes) as pool:
         results = pool.starmap(run_helper, combinations)
