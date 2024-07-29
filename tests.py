@@ -156,6 +156,36 @@ def test_employer_lying(variables):
     assert a_liar.current_match is e_liar
 
 
+def test_employer_lying_no_prev_match(variables):
+    (
+        e_rule_follower,
+        e_rule_breaker,
+        e_liar,
+        a_rule_follower,
+        a_rule_breaker,
+        a_liar,
+    ) = variables
+    e_liar.preferences = [a_liar, a_rule_breaker, a_rule_follower]
+    a_rule_breaker.preferences = [e_liar, e_rule_breaker, e_rule_follower]
+
+    e_liar.p_index = 0
+    assert e_liar.make_offer() == (a_liar, False)
+
+    assert a_liar.respond_to_offer(e_liar) == (True, False)
+    handle_offer(e_liar, False, a_liar, True, False)
+
+    assert e_liar.current_match is a_liar
+    assert a_liar.current_match is e_liar
+
+    assert e_liar.make_offer() == (a_rule_breaker, False)
+    assert a_rule_breaker.respond_to_offer(e_liar) == (True, True)
+
+    handle_offer(e_liar, False, a_rule_breaker, True, False)
+    assert e_liar.current_match is a_liar
+    assert a_liar.current_match is e_liar
+    assert a_rule_breaker.current_match is e_liar
+
+
 def test_responding_to_offer(variables):
     (
         e_rule_follower,
@@ -180,7 +210,7 @@ def test_responding_to_offer(variables):
 
     assert a_liar.respond_to_offer(e_rule_breaker) == (True, False)
     a_liar.current_match = e_rule_breaker
-    assert a_liar.respond_to_offer(e_rule_breaker) == (True, False)
+    assert a_liar.respond_to_offer(e_rule_follower) == (True, False)
 
 
 def test_offering(variables):
